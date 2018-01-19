@@ -46,9 +46,6 @@ public class LightGraph implements Graph {
     private IntArray outAdjacency;
     private long[] inOffsets;
     private long[] outOffsets;
-    private final boolean isBoth;
-    private final IdCombiner inCombiner;
-    private final IdCombiner outCombiner;
     private boolean canRelease = true;
 
 
@@ -65,14 +62,6 @@ public class LightGraph implements Graph {
         this.outAdjacency = outAdjacency;
         this.inOffsets = inOffsets;
         this.outOffsets = outOffsets;
-        isBoth = inOffsets != null && outOffsets != null;
-        if (isBoth) {
-            outCombiner = RawValues.BOTH;
-            inCombiner = RawValues.BOTH;
-        } else {
-            outCombiner = RawValues.OUTGOING;
-            inCombiner = RawValues.OUTGOING;
-        }
     }
 
     @Override
@@ -180,9 +169,7 @@ public class LightGraph implements Graph {
 
     @Override
     public double weightOf(final int sourceNodeId, final int targetNodeId) {
-        long relId = isBoth
-                ? RawValues.combineSorted(sourceNodeId, targetNodeId)
-                : RawValues.combineIntInt(sourceNodeId, targetNodeId);
+        long relId = RawValues.combineIntInt(sourceNodeId, targetNodeId);
         return weightMapping.get(relId);
     }
 
@@ -190,7 +177,7 @@ public class LightGraph implements Graph {
             final int node,
             final RelationshipConsumer consumer) {
         IntArray.Cursor cursor = cursor(node, inOffsets, inAdjacency);
-        consumeNodes(node, cursor, (t, h) -> RawValues.combineIntInt(h, t), consumer);
+        consumeNodes(node, cursor, RawValues.INCOMING, consumer);
         inAdjacency.returnCursor(cursor);
     }
 
@@ -206,7 +193,7 @@ public class LightGraph implements Graph {
             final int node,
             final WeightedRelationshipConsumer consumer) {
         IntArray.Cursor cursor = cursor(node, inOffsets, inAdjacency);
-        consumeNodes(node, cursor, (t, h) -> RawValues.combineIntInt(h, t), inCombiner, consumer);
+        consumeNodes(node, cursor, RawValues.INCOMING, consumer);
         inAdjacency.returnCursor(cursor);
     }
 
@@ -214,7 +201,7 @@ public class LightGraph implements Graph {
             final int node,
             final WeightedRelationshipConsumer consumer) {
         IntArray.Cursor cursor = cursor(node, outOffsets, outAdjacency);
-        consumeNodes(node, cursor, RawValues.OUTGOING, outCombiner, consumer);
+        consumeNodes(node, cursor, RawValues.OUTGOING, consumer);
         outAdjacency.returnCursor(cursor);
     }
 
@@ -228,7 +215,6 @@ public class LightGraph implements Graph {
             int startNode,
             IntArray.Cursor cursor,
             IdCombiner relId,
-            IdCombiner weightId,
             WeightedRelationshipConsumer consumer) {
         //noinspection UnnecessaryLocalVariable – prefer access of local var in loop
         final WeightMapping weightMap = this.weightMapping;
@@ -243,7 +229,7 @@ public class LightGraph implements Graph {
                         startNode,
                         targetNode,
                         relationId,
-                        weightMap.get(weightId.apply(startNode, targetNode))
+                        weightMap.get(relationId)
                 );
             }
         }

@@ -90,7 +90,6 @@ public class HugeGraphImpl implements HugeGraph {
     private ByteArray.DeltaCursor empty;
     private ByteArray.DeltaCursor inCache;
     private ByteArray.DeltaCursor outCache;
-    private final boolean isBoth;
     private boolean canRelease = true;
 
     HugeGraphImpl(
@@ -111,7 +110,6 @@ public class HugeGraphImpl implements HugeGraph {
         inCache = newCursor(this.inAdjacency);
         outCache = newCursor(this.outAdjacency);
         empty = inCache == null ? newCursor(this.outAdjacency) : newCursor(this.inAdjacency);
-        isBoth = inAdjacency != null && outAdjacency != null;
     }
 
     @Override
@@ -136,29 +134,26 @@ public class HugeGraphImpl implements HugeGraph {
 
     @Override
     public double weightOf(final long sourceNodeId, final long targetNodeId) {
-        if (isBoth && sourceNodeId > targetNodeId) {
-            return weights.weight(targetNodeId, sourceNodeId);
-        }
         return weights.weight(sourceNodeId, targetNodeId);
     }
 
     @Override
     public void forEachRelationship(
-            long vertexId,
+            long nodeId,
             Direction direction,
             HugeRelationshipConsumer consumer) {
         switch (direction) {
             case INCOMING:
-                forEachIncoming(vertexId, consumer);
+                forEachIncoming(nodeId, consumer);
                 return;
 
             case OUTGOING:
-                forEachOutgoing(vertexId, consumer);
+                forEachOutgoing(nodeId, consumer);
                 return;
 
             case BOTH:
-                forEachIncoming(vertexId, consumer);
-                forEachOutgoing(vertexId, consumer);
+                forEachOutgoing(nodeId, consumer);
+                forEachIncoming(nodeId, consumer);
                 return;
 
             default:
@@ -167,22 +162,19 @@ public class HugeGraphImpl implements HugeGraph {
     }
 
     @Override
-    public void forEachRelationship(
-            int nodeId,
-            Direction direction,
-            RelationshipConsumer consumer) {
+    public void forEachRelationship(int nodeId, Direction direction, RelationshipConsumer consumer) {
         switch (direction) {
             case INCOMING:
-                forEachIncoming(nodeId, consumer);
+                forEachIncoming((long) nodeId, toHugeInConsumer(consumer));
                 return;
 
             case OUTGOING:
-                forEachOutgoing(nodeId, consumer);
+                forEachOutgoing((long) nodeId, toHugeOutConsumer(consumer));
                 return;
 
             case BOTH:
-                forEachIncoming(nodeId, consumer);
-                forEachOutgoing(nodeId, consumer);
+                forEachOutgoing((long) nodeId, toHugeOutConsumer(consumer));
+                forEachIncoming((long) nodeId, toHugeInConsumer(consumer));
                 return;
 
             default:
@@ -191,19 +183,24 @@ public class HugeGraphImpl implements HugeGraph {
     }
 
     @Override
-    public void forEachRelationship(
-            int nodeId,
-            Direction direction,
-            WeightedRelationshipConsumer consumer) {
-        RelationshipConsumer nonWeighted = (s, t, relId) -> {
-            double weight = weightOf((long) s, (long) t);
-            return consumer.accept(
-                    s,
-                    t,
-                    RawValues.combineIntInt(direction, s, t),
-                    weight);
-        };
-        forEachRelationship(nodeId, direction, nonWeighted);
+    public void forEachRelationship(int nodeId, Direction direction, WeightedRelationshipConsumer consumer) {
+        switch (direction) {
+            case INCOMING:
+                forEachIncoming((long) nodeId, toHugeInConsumer(consumer));
+                return;
+
+            case OUTGOING:
+                forEachOutgoing((long) nodeId, toHugeOutConsumer(consumer));
+                return;
+
+            case BOTH:
+                forEachOutgoing((long) nodeId, toHugeOutConsumer(consumer));
+                forEachIncoming((long) nodeId, toHugeInConsumer(consumer));
+                return;
+
+            default:
+                throw new IllegalArgumentException(direction + "");
+        }
     }
 
     @Override
@@ -234,8 +231,8 @@ public class HugeGraphImpl implements HugeGraph {
     }
 
     @Override
-    public long toOriginalNodeId(long vertexId) {
-        return idMapping.toOriginalNodeId(vertexId);
+    public long toOriginalNodeId(long nodeId) {
+        return idMapping.toOriginalNodeId(nodeId);
     }
 
     @Override
@@ -244,9 +241,7 @@ public class HugeGraphImpl implements HugeGraph {
     }
 
     @Override
-    public void forEachIncoming(
-            final long node,
-            final HugeRelationshipConsumer consumer) {
+    public void forEachIncoming(final long node, final HugeRelationshipConsumer consumer) {
         ByteArray.DeltaCursor cursor = cursor(
                 node,
                 inCache,
@@ -257,22 +252,11 @@ public class HugeGraphImpl implements HugeGraph {
 
     @Override
     public void forEachIncoming(int nodeId, RelationshipConsumer consumer) {
-        final long node = (long) nodeId;
-        ByteArray.DeltaCursor cursor = cursor(
-                node,
-                inAdjacency.newCursor(),
-                inOffsets,
-                inAdjacency);
-        consumeNodes(node, cursor, (s, t) -> consumer.accept(
-                (int) s,
-                (int) t,
-                RawValues.combineIntInt((int) t, (int) s)));
+        forEachIncoming((long) nodeId, toHugeInConsumer(consumer));
     }
 
     @Override
-    public void forEachOutgoing(
-            final long node,
-            final HugeRelationshipConsumer consumer) {
+    public void forEachOutgoing(final long node, final HugeRelationshipConsumer consumer) {
         ByteArray.DeltaCursor cursor = cursor(
                 node,
                 outCache,
@@ -283,16 +267,7 @@ public class HugeGraphImpl implements HugeGraph {
 
     @Override
     public void forEachOutgoing(int nodeId, RelationshipConsumer consumer) {
-        final long node = (long) nodeId;
-        ByteArray.DeltaCursor cursor = cursor(
-                node,
-                outAdjacency.newCursor(),
-                outOffsets,
-                outAdjacency);
-        consumeNodes(node, cursor, (s, t) -> consumer.accept(
-                (int) s,
-                (int) t,
-                RawValues.combineIntInt((int) s, (int) t)));
+        forEachOutgoing((long) nodeId, toHugeOutConsumer(consumer));
     }
 
     @Override
@@ -311,67 +286,6 @@ public class HugeGraphImpl implements HugeGraph {
     @Override
     public HugeRelationshipIntersect intersectionCopy() {
         return new HugeGraphIntersectImpl(outAdjacency, outOffsets);
-    }
-
-    private ByteArray.DeltaCursor newCursor(final ByteArray adjacency) {
-        return adjacency != null ? adjacency.newCursor() : null;
-    }
-
-    private int degree(long node, LongArray offsets, ByteArray array) {
-        long offset = offsets.get(node);
-        if (offset == 0L) {
-            return 0;
-        }
-        return array.getInt(offset);
-    }
-
-    private ByteArray.DeltaCursor cursor(
-            long node,
-            ByteArray.DeltaCursor reuse,
-            LongArray offsets,
-            ByteArray array) {
-        final long offset = offsets.get(node);
-        if (offset == 0L) {
-            return empty;
-        }
-        return array.deltaCursor(reuse, offset);
-    }
-
-    private void consumeNodes(
-            long startNode,
-            ByteArray.DeltaCursor cursor,
-            HugeRelationshipConsumer consumer) {
-        //noinspection StatementWithEmptyBody
-        while (cursor.hasNextVLong() && consumer.accept(startNode, cursor.nextVLong()));
-    }
-
-    @Override
-    public void release() {
-        if (!canRelease) return;
-        if (inAdjacency != null) {
-            tracker.remove(inAdjacency.release());
-            tracker.remove(inOffsets.release());
-            inAdjacency = null;
-            inOffsets = null;
-        }
-        if (outAdjacency != null) {
-            tracker.remove(outAdjacency.release());
-            tracker.remove(outOffsets.release());
-            outAdjacency = null;
-            outOffsets = null;
-        }
-        if (weights != null) {
-            tracker.remove(weights.release());
-        }
-        empty = null;
-        inCache = null;
-        outCache = null;
-        weights = null;
-    }
-
-    @Override
-    public void canRelease(boolean canRelease) {
-        this.canRelease = canRelease;
     }
 
     /**
@@ -412,5 +326,102 @@ public class HugeGraphImpl implements HugeGraph {
     @Override
     public boolean exists(int sourceNodeId, int targetNodeId, Direction direction) {
         return exists((long) sourceNodeId, (long) targetNodeId, direction);
+    }
+
+    @Override
+    public void canRelease(boolean canRelease) {
+        this.canRelease = canRelease;
+    }
+
+    @Override
+    public void release() {
+        if (!canRelease) return;
+        if (inAdjacency != null) {
+            tracker.remove(inAdjacency.release());
+            tracker.remove(inOffsets.release());
+            inAdjacency = null;
+            inOffsets = null;
+        }
+        if (outAdjacency != null) {
+            tracker.remove(outAdjacency.release());
+            tracker.remove(outOffsets.release());
+            outAdjacency = null;
+            outOffsets = null;
+        }
+        if (weights != null) {
+            tracker.remove(weights.release());
+        }
+        empty = null;
+        inCache = null;
+        outCache = null;
+        weights = null;
+    }
+
+    private ByteArray.DeltaCursor newCursor(final ByteArray adjacency) {
+        return adjacency != null ? adjacency.newCursor() : null;
+    }
+
+    private int degree(long node, LongArray offsets, ByteArray array) {
+        long offset = offsets.get(node);
+        if (offset == 0L) {
+            return 0;
+        }
+        return array.getInt(offset);
+    }
+
+    private ByteArray.DeltaCursor cursor(
+            long node,
+            ByteArray.DeltaCursor reuse,
+            LongArray offsets,
+            ByteArray array) {
+        final long offset = offsets.get(node);
+        if (offset == 0L) {
+            return empty;
+        }
+        return array.deltaCursor(reuse, offset);
+    }
+
+    private void consumeNodes(
+            long startNode,
+            ByteArray.DeltaCursor cursor,
+            HugeRelationshipConsumer consumer) {
+        //noinspection StatementWithEmptyBody
+        while (cursor.hasNextVLong() && consumer.accept(startNode, cursor.nextVLong()));
+    }
+
+    private HugeRelationshipConsumer toHugeOutConsumer(RelationshipConsumer consumer) {
+        return (s, t) -> consumer.accept(
+                (int) s,
+                (int) t,
+                RawValues.combineIntInt((int) s, (int) t));
+    }
+
+    private HugeRelationshipConsumer toHugeInConsumer(RelationshipConsumer consumer) {
+        return (s, t) -> consumer.accept(
+                (int) s,
+                (int) t,
+                RawValues.combineIntInt((int) t, (int) s));
+    }
+
+    private HugeRelationshipConsumer toHugeOutConsumer(WeightedRelationshipConsumer consumer) {
+        return (s, t) -> {
+            double weight = weightOf(s, t);
+            return consumer.accept(
+                    (int) s,
+                    (int) t,
+                    RawValues.combineIntInt((int) s, (int) t),
+                    weight);
+        };
+    }
+
+    private HugeRelationshipConsumer toHugeInConsumer(WeightedRelationshipConsumer consumer) {
+        return (s, t) -> {
+            double weight = weightOf(t, s);
+            return consumer.accept(
+                    (int) s,
+                    (int) t,
+                    RawValues.combineIntInt((int) t, (int) s),
+                    weight);
+        };
     }
 }
