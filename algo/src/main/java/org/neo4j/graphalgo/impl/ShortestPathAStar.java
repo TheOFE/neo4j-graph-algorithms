@@ -87,8 +87,8 @@ public class ShortestPathAStar extends Algorithm<ShortestPathAStar> {
             		direction,
             		(source, target, relationshipId, weight) -> {
             			double neighbourLat = getNodeCoordinate(target, "latitude");
-            			double neighbourLong = getNodeCoordinate(target, "longitude");
-            			double heuristic = computeHeuristic(neighbourLat, neighbourLong, goalNodeLat, goalNodeLon);
+            			double neighbourLon = getNodeCoordinate(target, "longitude");
+            			double heuristic = computeHeuristic(neighbourLat, neighbourLon, goalNodeLat, goalNodeLon);
             			updateCosts(source, target, weight + currentNodeCost, heuristic);
             			if (!closedNodes.contains(target)) {
             				openNodes.add(target, 0);
